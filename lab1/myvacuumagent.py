@@ -1,4 +1,5 @@
 from lab1.liuvacuum import *
+import copy
 
 DEBUG_OPT_DENSEWORLDMAP = False
 
@@ -7,18 +8,17 @@ AGENT_STATE_WALL = 1
 AGENT_STATE_CLEAR = 2
 AGENT_STATE_DIRT = 3
 AGENT_STATE_HOME = 4
+AGENT_STATE_VISITED = 5
 
 AGENT_DIRECTION_NORTH = 0
 AGENT_DIRECTION_EAST = 1
 AGENT_DIRECTION_SOUTH = 2
 AGENT_DIRECTION_WEST = 3
 
-FIND_START_POS_S = 0
-FIND_START_POS_E = 1
-CLEANING_S = 2
-CLEANING_T1 = 3
-CLEANING_T2 = 4
-FIND_HOME = 5
+
+HAVE_SEQ = 0
+NOT_SEQ = 1
+FIND_HOME = 2
 
 def direction_to_string(cdr):
     cdr %= 4
@@ -43,8 +43,7 @@ class MyAgentState:
         self.direction = AGENT_DIRECTION_EAST
         self.pos_x = 1
         self.pos_y = 1
-        self.working_state = FIND_START_POS_S
-        self.last_bump_dir = AGENT_DIRECTION_NORTH
+        self.working_state = NOT_SEQ
 
         # Metadata
         self.world_width = width
@@ -98,9 +97,10 @@ class MyVacuumAgent(Agent):
     def __init__(self, world_width, world_height, log):
         super().__init__(self.execute)
         self.initial_random_actions = 10
-        self.iteration_counter = 300
+        self.iteration_counter = 800
         self.state = MyAgentState(world_width, world_height)
         self.log = log
+        self.seq = []
 
 
     def move_to_random_start_position(self, bump):
@@ -142,6 +142,109 @@ class MyVacuumAgent(Agent):
                 self.state.direction = AGENT_DIRECTION_NORTH
             elif movement == ACTION_TURN_RIGHT:
                 self.state.direction = AGENT_DIRECTION_SOUTH
+
+    def calc_param(self, dir_old, dir_new):
+        if dir_new == dir_old:
+            return [1, [ACTION_FORWARD]]
+        elif abs(dir_old - dir_new) == 2:
+            return [3, [ACTION_TURN_RIGHT, ACTION_TURN_RIGHT, ACTION_FORWARD]]
+        elif dir_old == 0 or dir_old == 3:
+            if dir_new == 1 or dir_new == 0:
+                return [2, [ACTION_TURN_RIGHT, ACTION_FORWARD]]
+            else:
+                return [2, [ACTION_TURN_LEFT, ACTION_FORWARD]]
+        else:
+            if dir_old < dir_new:
+                return [2, [ACTION_TURN_RIGHT, ACTION_FORWARD]]
+            else:
+                return [2, [ACTION_TURN_LEFT, ACTION_FORWARD]]
+
+
+    def find_un(self, dir, cord, cost, seq, temp_map):
+        if temp_map[cord[0]][cord[1]] > 4 and temp_map[cord[0]][cord[1]] < cost+5:
+            return [-1, cord, []]
+        temp_map[cord[0]][cord[1]] = cost+5
+        if self.state.world[cord[0]][cord[1]] == AGENT_STATE_UNKNOWN:
+            return [cost, cord, seq]
+        elif self.state.world[cord[0]][cord[1]] == AGENT_STATE_WALL:
+            return [-1, cord, []]
+        else:
+
+            w = [-1]
+            e = [-1]
+            s = [-1]
+            n = [-1]
+            if (cord[0] - 1 > 0 ):
+                param = self.calc_param(dir, AGENT_DIRECTION_WEST)
+                w = self.find_un(AGENT_DIRECTION_WEST, [cord[0]-1, cord[1]], cost+param[0], seq+param[1], temp_map)
+
+            if (cord[0] + 1 < len(self.state.world)-1 ):
+                param = self.calc_param(dir, AGENT_DIRECTION_EAST)
+                e = self.find_un(AGENT_DIRECTION_EAST, [cord[0]+1, cord[1]], cost+param[0], seq+param[1], temp_map)
+
+            if (cord[1] - 1 > 0 ):
+                param = self.calc_param(dir, AGENT_DIRECTION_NORTH)
+                n = self.find_un(AGENT_DIRECTION_NORTH, [cord[0], cord[1]-1], cost+param[0], seq+param[1], temp_map)
+
+            if (cord[1] + 1 < len(self.state.world[0])-1):
+                param = self.calc_param(dir, AGENT_DIRECTION_SOUTH)
+                s = self.find_un(AGENT_DIRECTION_SOUTH, [cord[0], cord[1]+1], cost+param[0], seq+param[1], temp_map)
+
+            temp_list = [w,e,n,s]
+            temp_list.sort(key=lambda x: x[0])
+            """
+            for i in temp_list:
+                if i[0] > 0:
+                    return i
+
+            """
+            for i in range(0,len(temp_list)):
+                if temp_list[i][0] > 0:
+                    if i < len(temp_list)-1:
+                        if temp_list[i][0] == temp_list[i+1][0] and \
+                        (temp_list[i][1][0] + temp_list[i][1][1]) < (temp_list[i+1][1][0] + temp_list[i+1][1][1]):
+                            return temp_list[i+1]
+                    return temp_list[i]
+
+            return [-1, cord, []]
+
+
+    def find_home(self, home_cord, dir, cord, cost, seq, temp_map):
+        if temp_map[cord[0]][cord[1]] > 4 and temp_map[cord[0]][cord[1]] < cost+5:
+            return [-1, cord, []]
+        elif self.state.world[cord[0]][cord[1]] == AGENT_STATE_WALL:
+            return [-1, cord, []]
+        temp_map[cord[0]][cord[1]] = cost+5
+        if home_cord == cord:
+            return [cost, cord, seq]
+        else:
+            w = [-1]
+            e = [-1]
+            s = [-1]
+            n = [-1]
+            if (cord[0] - 1 > 0):
+                param = self.calc_param(dir, AGENT_DIRECTION_WEST)
+                w = self.find_home([1,1], AGENT_DIRECTION_WEST, [cord[0]-1, cord[1]], cost+param[0], seq+param[1], temp_map)
+
+            if (cord[0] + 1 < len(self.state.world)-1):
+                param = self.calc_param(dir, AGENT_DIRECTION_EAST)
+                e = self.find_home([1,1], AGENT_DIRECTION_EAST, [cord[0]+1, cord[1]], cost+param[0], seq+param[1], temp_map)
+
+            if (cord[1] - 1 > 0):
+                param = self.calc_param(dir, AGENT_DIRECTION_NORTH)
+                n = self.find_home([1,1], AGENT_DIRECTION_NORTH, [cord[0], cord[1]-1], cost+param[0], seq+param[1], temp_map)
+
+            if (cord[1] + 1 < len(self.state.world[0])-1):
+                param = self.calc_param(dir, AGENT_DIRECTION_SOUTH)
+                s = self.find_home([1,1], AGENT_DIRECTION_SOUTH, [cord[0], cord[1]+1], cost+param[0], seq+param[1], temp_map)
+
+            temp_list = [w,e,n,s]
+            temp_list.sort(key=lambda x: x[0])
+            for i in temp_list:
+                if i[0] > 0:
+                    return i
+
+            return [-1, cord, []]
 
 
     def execute(self, percept):
@@ -203,7 +306,40 @@ class MyVacuumAgent(Agent):
 
         # Debug
         self.state.print_world_debug()
+#########################################################################################################################################################33
 
+
+        if dirt:
+            self.state.last_action = ACTION_SUCK
+            return ACTION_SUCK
+        elif bump:
+            self.state.working_state = NOT_SEQ
+
+        if self.state.working_state == NOT_SEQ:
+            self.seq = self.find_un(self.state.direction, [self.state.pos_x, self.state.pos_y], 0, [], copy.deepcopy(self.state.world))
+            if len(self.seq[2]) == 0:
+                if home:
+                    self.iteration_counter = 0
+                    self.state.last_action = ACTION_NOP
+                    return ACTION_NOP
+                else:
+                    self.state.working_state = FIND_HOME
+                    self.seq = self.find_home([1,1], self.state.direction, [self.state.pos_x, self.state.pos_y], 0, [], copy.deepcopy(self.state.world))
+            else:
+                self.state.working_state = HAVE_SEQ
+
+
+        if self.state.working_state == HAVE_SEQ or self.state.working_state == FIND_HOME:
+            new_action = self.seq[2][0]
+            self.seq[2].pop(0)
+            if len(self.seq[2]) == 0:
+                self.state.working_state = NOT_SEQ
+            self.update_direction(new_action)
+            self.state.last_action = new_action
+            return new_action
+
+
+"""
         if dirt:
             self.state.last_action = ACTION_SUCK
             return ACTION_SUCK
@@ -282,65 +418,4 @@ class MyVacuumAgent(Agent):
             else:
                 self.state.last_action = ACTION_FORWARD
                 return ACTION_FORWARD
-
-
-
-
-
-
-
-
-
-
-
-        """
-        elif self.state.working_state == CLEANING:
-            if dirt:
-                self.state.last_action = ACTION_SUCK
-                return ACTION_SUCK
-            elif bump:
-                if self.state.direction == AGENT_DIRECTION_WEST:
-                    self.state.last_action = ACTION_TURN_RIGHT
-                    self.update_direction(ACTION_TURN_RIGHT)
-                    return ACTION_TURN_RIGHT
-                elif self.state.direction == AGENT_DIRECTION_EAST:
-                    self.state.last_action = ACTION_TURN_LEFT
-                    self.update_direction(ACTION_TURN_LEFT)
-                    return ACTION_TURN_LEFT
-                else:
-                    self.state.working_state = FIND_HOME
-            elif self.state.direction == AGENT_DIRECTION_NORTH:
-                if self.state.last_action == ACTION_TURN_RIGHT or self.state.last_action == ACTION_TURN_LEFT:
-                    self.state.last_action = ACTION_FORWARD
-                    self.update_direction(ACTION_FORWARD)
-                    return ACTION_FORWARD
-                else:
-                    if self.state.last_bump_dir == AGENT_DIRECTION_WEST:
-                        self.state.last_action = ACTION_TURN_RIGHT
-                        self.update_direction(ACTION_TURN_RIGHT)
-                        return ACTION_TURN_RIGHT
-                    else:
-                        self.state.last_action = ACTION_TURN_LEFT
-                        self.update_direction(ACTION_TURN_LEFT)
-                        return ACTION_TURN_LEFT
-
-            else:
-                self.state.last_action = ACTION_FORWARD
-                return ACTION_FORWARD
-
-                """
-
-
-        """
-        # Decide action
-        if dirt:
-            self.log("DIRT -> choosing SUCK action!")
-            self.state.last_action = ACTION_SUCK
-            return ACTION_SUCK
-        elif bump:
-            self.state.last_action = ACTION_NOP
-            return ACTION_NOP
-        else:
-            self.state.last_action = ACTION_FORWARD
-            return ACTION_FORWARD
-        """
+"""
